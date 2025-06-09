@@ -1,0 +1,649 @@
+# Agno Framework - Полное руководство по созданию агентов
+
+## Источники информации
+- [Официальная документация Agno](https://docs.agno.com/introduction)
+- [Groq + Agno документация](https://console.groq.com/docs/agno)
+- [Reasoning Agents Guide](https://docs.agno.com/reasoning/reasoning-agents)
+- [Knowledge Base Guide](https://docs.agno.com/knowledge/introduction)
+- [Agent Teams Guide](https://docs.agno.com/teams/introduction)
+
+## Что такое Agno?
+
+**Agno** - это полнофункциональный фреймворк для создания мультиагентных систем с памятью, знаниями и рассуждениями.
+
+### 5 уровней агентных систем:
+
+1. **Уровень 1:** Агенты с инструментами и инструкциями
+2. **Уровень 2:** Агенты со знаниями и хранилищем
+3. **Уровень 3:** Агенты с памятью и рассуждениями
+4. **Уровень 4:** Команды агентов, которые могут рассуждать и сотрудничать
+5. **Уровень 5:** Агентные рабочие процессы с состоянием и детерминизмом
+
+### Ключевые особенности Agno:
+
+- **Модель-агностик**: Единый интерфейс для 23+ провайдеров моделей
+- **Высокая производительность**: Агенты создаются за ~3μs и используют ~6.5Kib памяти
+- **Рассуждения как первоклассный гражданин**: 3 подхода к рассуждениям
+- **Нативная мультимодальность**: Поддержка текста, изображений, аудио и видео
+- **Продвинутая мультиагентная архитектура**: Команды агентов с рассуждениями и памятью
+- **Встроенный агентный поиск**: Поиск информации в 20+ векторных базах данных
+- **Встроенная память и хранилище сессий**: Долгосрочная память и хранилище сессий
+- **Структурированные выходы**: Полностью типизированные ответы
+- **Готовые FastAPI маршруты**: От разработки до продакшена за минуты
+- **Мониторинг**: Мониторинг сессий агентов в реальном времени
+
+## Установка и настройка
+
+```bash
+# Базовая установка
+pip install agno
+
+# С дополнительными зависимостями
+pip install agno[openai,anthropic,groq,duckduckgo-search,yfinance]
+
+# Создание виртуального окружения
+python3 -m venv .venv
+source .venv/bin/activate  # Linux/Mac
+# или
+.venv\Scripts\activate  # Windows
+```
+
+### Настройка API ключей:
+
+```bash
+export OPENAI_API_KEY="your-openai-key"
+export ANTHROPIC_API_KEY="your-anthropic-key"
+export GROQ_API_KEY="your-groq-key"
+```
+
+## Основные компоненты агента
+
+### 1. Модель (Model)
+Контролирует поток выполнения и принимает решения.
+
+### 2. Инструменты (Tools)
+Позволяют агенту выполнять действия и взаимодействовать с внешними системами.
+
+### 3. Инструкции (Instructions)
+Программируют агента, обучая его использовать инструменты и отвечать.
+
+### 4. Рассуждения (Reasoning)
+Позволяют агенту "думать" перед ответом и "анализировать" результаты действий.
+
+### 5. Знания (Knowledge)
+Доменно-специфическая информация для поиска во время выполнения.
+
+### 6. Хранилище (Storage)
+Сохраняет историю сессий и состояние в базе данных.
+
+### 7. Память (Memory)
+Долгосрочная память для хранения и воспоминания информации.
+
+## Уровень 1: Агенты с инструментами и инструкциями
+
+```python
+from agno.agent import Agent
+from agno.models.anthropic import Claude
+from agno.tools.yfinance import YFinanceTools
+
+agent = Agent(
+    model=Claude(id="claude-sonnet-4-20250514"),
+    tools=[YFinanceTools(stock_price=True)],
+    instructions="Use tables to display data. Don't include any other text.",
+    markdown=True,
+)
+
+agent.print_response("What is the stock price of Apple?", stream=True)
+```
+
+## Уровень 2: Агенты со знаниями и хранилищем
+
+```python
+from agno.agent import Agent
+from agno.embedder.openai import OpenAIEmbedder
+from agno.knowledge.url import UrlKnowledge
+from agno.models.anthropic import Claude
+from agno.storage.sqlite import SqliteStorage
+from agno.vectordb.lancedb import LanceDb, SearchType
+
+# Загрузка документации Agno в базу знаний
+knowledge = UrlKnowledge(
+    urls=["https://docs.agno.com/introduction.md"],
+    vector_db=LanceDb(
+        uri="tmp/lancedb",
+        table_name="agno_docs",
+        search_type=SearchType.hybrid,
+        embedder=OpenAIEmbedder(id="text-embedding-3-small", dimensions=1536),
+    ),
+)
+
+# Хранение сессий агента в SQLite базе данных
+storage = SqliteStorage(table_name="agent_sessions", db_file="tmp/agent.db")
+
+agent = Agent(
+    name="Agno Assist",
+    model=Claude(id="claude-sonnet-4-20250514"),
+    instructions=[
+        "Search your knowledge before answering the question.",
+        "Only include the output in your response. No other text.",
+    ],
+    knowledge=knowledge,
+    storage=storage,
+    add_datetime_to_instructions=True,
+    add_history_to_messages=True,
+    num_history_runs=3,
+    markdown=True,
+)
+
+# Загрузка базы знаний (комментировать после первого запуска)
+agent.knowledge.load(recreate=False)
+agent.print_response("What is Agno?", stream=True)
+```
+
+## Уровень 3: Агенты с памятью и рассуждениями
+
+```python
+from agno.agent import Agent
+from agno.memory.v2.db.sqlite import SqliteMemoryDb
+from agno.memory.v2.memory import Memory
+from agno.models.anthropic import Claude
+from agno.tools.reasoning import ReasoningTools
+from agno.tools.yfinance import YFinanceTools
+
+memory = Memory(
+    model=Claude(id="claude-sonnet-4-20250514"),
+    db=SqliteMemoryDb(table_name="user_memories", db_file="tmp/agent.db"),
+    delete_memories=True,
+    clear_memories=True,
+)
+
+agent = Agent(
+    model=Claude(id="claude-sonnet-4-20250514"),
+    tools=[
+        ReasoningTools(add_instructions=True),
+        YFinanceTools(stock_price=True, analyst_recommendations=True, 
+                     company_info=True, company_news=True),
+    ],
+    user_id="ava",
+    instructions=[
+        "Use tables to display data.",
+        "Include sources in your response.",
+        "Only include the report in your response. No other text.",
+    ],
+    memory=memory,
+    enable_agentic_memory=True,
+    markdown=True,
+)
+
+# Создание памяти о любимых акциях пользователя
+agent.print_response(
+    "My favorite stocks are NVIDIA and TSLA",
+    stream=True,
+    show_full_reasoning=True,
+    stream_intermediate_steps=True,
+)
+
+# Использование памяти для ответа на вопрос
+agent.print_response(
+    "Can you compare my favorite stocks?",
+    stream=True,
+    show_full_reasoning=True,
+    stream_intermediate_steps=True,
+)
+```
+
+## Рассуждения (Reasoning)
+
+Agno поддерживает 3 подхода к рассуждениям:
+
+### 1. Reasoning Models
+Модели, обученные думать перед ответом (o3-mini, Claude 3.7 sonnet, DeepSeek-R1).
+
+```python
+from agno.agent import Agent
+from agno.models.openai import OpenAIChat
+
+agent = Agent(model=OpenAIChat(id="o3-mini"))
+agent.print_response(
+    "Solve the trolley problem. Evaluate multiple ethical frameworks.",
+    stream=True,
+)
+```
+
+### 2. Reasoning Tools
+Предоставление модели инструмента "думать".
+
+```python
+from agno.agent import Agent
+from agno.models.anthropic import Claude
+from agno.tools.thinking import ThinkingTools
+from agno.tools.yfinance import YFinanceTools
+
+reasoning_agent = Agent(
+    model=Claude(id="claude-3-7-sonnet-latest"),
+    tools=[
+        ThinkingTools(add_instructions=True),
+        YFinanceTools(stock_price=True, analyst_recommendations=True, 
+                     company_info=True, company_news=True),
+    ],
+    instructions="Use tables where possible",
+    markdown=True,
+)
+
+reasoning_agent.print_response(
+    "Write a report on NVDA. Only the report, no other text.",
+    stream=True,
+    show_full_reasoning=True,
+    stream_intermediate_steps=True,
+)
+```
+
+### 3. Reasoning Agents
+Мультиагентная система с цепочкой рассуждений.
+
+```python
+from agno.agent import Agent
+from agno.models.openai import OpenAIChat
+
+reasoning_agent = Agent(
+    model=OpenAIChat(id="gpt-4o"),
+    reasoning=True,
+    markdown=True,
+)
+
+reasoning_agent.print_response(
+    "Solve the trolley problem. Evaluate multiple ethical frameworks.",
+    stream=True,
+    show_full_reasoning=True,
+)
+```
+
+## Команды агентов (Agent Teams)
+
+### Режимы работы команд:
+- **Route Mode**: Лидер команды направляет запрос наиболее подходящему участнику
+- **Coordinate Mode**: Лидер делегирует задачи и синтезирует результаты
+- **Collaborate Mode**: Все участники получают одну задачу, координатор синтезирует результаты
+
+```python
+from agno.agent import Agent
+from agno.models.openai import OpenAIChat
+from agno.team import Team
+from agno.tools.duckduckgo import DuckDuckGoTools
+from agno.tools.yfinance import YFinanceTools
+
+web_agent = Agent(
+    name="Web Agent",
+    role="Search the web for information",
+    model=OpenAIChat(id="gpt-4o"),
+    tools=[DuckDuckGoTools()],
+    instructions="Always include sources",
+    markdown=True,
+)
+
+finance_agent = Agent(
+    name="Finance Agent",
+    role="Get financial data",
+    model=OpenAIChat(id="gpt-4o"),
+    tools=[YFinanceTools(stock_price=True, analyst_recommendations=True, 
+                        company_info=True)],
+    instructions="Use tables to display data",
+    markdown=True,
+)
+
+agent_team = Team(
+    name="Research Team",
+    mode="coordinate",
+    members=[web_agent, finance_agent],
+    model=OpenAIChat(id="gpt-4o"),
+    instructions=["Always include sources", "Use tables to display data"],
+    show_tool_calls=True,
+    markdown=True,
+)
+
+agent_team.print_response(
+    "What's the market outlook and financial performance of AI semiconductor companies?", 
+    stream=True
+)
+```
+
+## Популярные модели
+
+### OpenAI
+```python
+from agno.models.openai import OpenAIChat
+
+model = OpenAIChat(id="gpt-4o")
+model = OpenAIChat(id="gpt-4o-mini")
+model = OpenAIChat(id="o3-mini")
+```
+
+### Anthropic
+```python
+from agno.models.anthropic import Claude
+
+model = Claude(id="claude-sonnet-4-20250514")
+model = Claude(id="claude-3-7-sonnet-latest")
+```
+
+### Groq
+```python
+from agno.models.groq import Groq
+
+model = Groq(id="llama-3.3-70b-versatile")
+model = Groq(id="deepseek-r1-distill-llama-70b")
+```
+
+### DeepSeek
+```python
+from agno.models.deepseek import DeepSeek
+
+model = DeepSeek(id="deepseek-chat")
+```
+
+## Популярные инструменты
+
+### Веб-поиск
+```python
+from agno.tools.duckduckgo import DuckDuckGoTools
+from agno.tools.tavily import TavilyTools
+from agno.tools.exa import ExaTools
+
+tools = [
+    DuckDuckGoTools(),
+    TavilyTools(),
+    ExaTools()
+]
+```
+
+### Финансовые данные
+```python
+from agno.tools.yfinance import YFinanceTools
+
+tools = [
+    YFinanceTools(
+        stock_price=True,
+        analyst_recommendations=True,
+        company_info=True,
+        company_news=True
+    )
+]
+```
+
+### Рассуждения
+```python
+from agno.tools.reasoning import ReasoningTools
+from agno.tools.thinking import ThinkingTools
+
+tools = [
+    ReasoningTools(add_instructions=True),
+    ThinkingTools(add_instructions=True)
+]
+```
+
+### Чтение новостей
+```python
+from agno.tools.hackernews import HackerNewsTools
+from agno.tools.newspaper4k import Newspaper4kTools
+
+tools = [
+    HackerNewsTools(),
+    Newspaper4kTools()
+]
+```
+
+## Базы знаний
+
+### URL Knowledge
+```python
+from agno.knowledge.url import UrlKnowledge
+from agno.vectordb.lancedb import LanceDb
+from agno.embedder.openai import OpenAIEmbedder
+
+knowledge = UrlKnowledge(
+    urls=["https://docs.agno.com/introduction.md"],
+    vector_db=LanceDb(
+        uri="tmp/lancedb",
+        table_name="docs",
+        embedder=OpenAIEmbedder(id="text-embedding-3-small"),
+    ),
+)
+```
+
+### PDF Knowledge
+```python
+from agno.knowledge.pdf import PDFKnowledgeBase
+from agno.knowledge.pdf_url import PDFUrlKnowledgeBase
+
+# Локальные PDF файлы
+pdf_knowledge = PDFKnowledgeBase(
+    path="data/pdfs",
+    vector_db=vector_db,
+)
+
+# PDF по URL
+pdf_url_knowledge = PDFUrlKnowledgeBase(
+    urls=["https://example.com/document.pdf"],
+    vector_db=vector_db,
+)
+```
+
+### CSV Knowledge
+```python
+from agno.knowledge.csv import CSVKnowledgeBase
+
+csv_knowledge = CSVKnowledgeBase(
+    path="data/file.csv",
+    vector_db=vector_db,
+)
+```
+
+## Векторные базы данных
+
+### LanceDB
+```python
+from agno.vectordb.lancedb import LanceDb, SearchType
+
+vector_db = LanceDb(
+    uri="tmp/lancedb",
+    table_name="knowledge",
+    search_type=SearchType.hybrid,
+    embedder=OpenAIEmbedder(id="text-embedding-3-small"),
+)
+```
+
+### Qdrant
+```python
+from agno.vectordb.qdrant import Qdrant
+
+vector_db = Qdrant(
+    collection="knowledge",
+    url="http://localhost:6333",
+    embedder=OpenAIEmbedder(id="text-embedding-3-small"),
+)
+```
+
+### Chroma
+```python
+from agno.vectordb.chroma import ChromaDb
+
+vector_db = ChromaDb(
+    collection="knowledge",
+    embedder=OpenAIEmbedder(id="text-embedding-3-small"),
+)
+```
+
+## Хранилище и память
+
+### SQLite Storage
+```python
+from agno.storage.sqlite import SqliteStorage
+
+storage = SqliteStorage(
+    table_name="agent_sessions",
+    db_file="tmp/agent.db"
+)
+```
+
+### Memory
+```python
+from agno.memory.v2.db.sqlite import SqliteMemoryDb
+from agno.memory.v2.memory import Memory
+
+memory_db = SqliteMemoryDb(
+    table_name="user_memories",
+    db_file="tmp/agent.db"
+)
+
+memory = Memory(
+    model=Claude(id="claude-sonnet-4-20250514"),
+    db=memory_db,
+    delete_memories=True,
+    clear_memories=True,
+)
+```
+
+## Структурированные выходы
+
+```python
+from pydantic import BaseModel
+from typing import List
+
+class NewsReport(BaseModel):
+    title: str
+    summary: str
+    key_points: List[str]
+    sources: List[str]
+
+agent = Agent(
+    model=OpenAIChat(id="gpt-4o"),
+    response_model=NewsReport,
+    tools=[DuckDuckGoTools()],
+)
+
+report = agent.run("Find latest AI news").content
+print(f"Title: {report.title}")
+print(f"Summary: {report.summary}")
+```
+
+## Отладка
+
+```python
+# Включение режима отладки
+agent = Agent(
+    model=OpenAIChat(id="gpt-4o"),
+    debug_mode=True,  # Показывает системные промпты и вызовы инструментов
+    show_tool_calls=True,  # Показывает вызовы инструментов в ответе
+)
+
+# Или через переменную окружения
+export AGNO_DEBUG=true
+```
+
+## Асинхронное выполнение
+
+```python
+import asyncio
+
+async def main():
+    agent = Agent(model=OpenAIChat(id="gpt-4o"))
+    
+    # Асинхронная загрузка знаний
+    if agent.knowledge:
+        await agent.knowledge.aload()
+    
+    # Асинхронный ответ
+    response = await agent.arun("What is AI?")
+    print(response.content)
+
+asyncio.run(main())
+```
+
+## Мониторинг
+
+Agno предоставляет встроенный мониторинг на [app.agno.com](https://app.agno.com):
+
+- Мониторинг сессий агентов в реальном времени
+- Анализ производительности
+- Отслеживание использования инструментов
+- Метрики качества ответов
+
+## Примеры использования
+
+### Новостной агент
+```python
+from agno.agent import Agent
+from agno.models.openai import OpenAIChat
+from agno.tools.duckduckgo import DuckDuckGoTools
+from agno.tools.tavily import TavilyTools
+
+news_agent = Agent(
+    name="News Researcher",
+    model=OpenAIChat(id="gpt-4o"),
+    tools=[DuckDuckGoTools(), TavilyTools()],
+    instructions="""
+    Вы - опытный новостной аналитик!
+    1. Найдите самые актуальные новости за последние 24 часа
+    2. Проверьте информацию из нескольких источников
+    3. Представьте информацию в ясном журналистском стиле
+    4. Включите релевантные цитаты и источники
+    """,
+    show_tool_calls=True,
+    markdown=True,
+)
+
+news = news_agent.run("Найдите последние новости об ИИ")
+```
+
+### Финансовый аналитик
+```python
+finance_agent = Agent(
+    name="Finance Analyst",
+    model=Claude(id="claude-sonnet-4-20250514"),
+    tools=[
+        ReasoningTools(add_instructions=True),
+        YFinanceTools(stock_price=True, analyst_recommendations=True, 
+                     company_info=True, company_news=True),
+    ],
+    instructions=[
+        "Используйте таблицы для отображения данных",
+        "Включайте источники в ответ",
+        "Предоставляйте детальный анализ с рекомендациями",
+    ],
+    markdown=True,
+)
+
+analysis = finance_agent.run("Проанализируйте акции NVIDIA")
+```
+
+## Лучшие практики
+
+### 1. Специализация агентов
+- Создавайте агентов с узкой специализацией
+- Используйте команды агентов для сложных задач
+- Ограничивайте количество инструментов на агента
+
+### 2. Управление памятью
+- Используйте память для персонализации
+- Регулярно очищайте устаревшие воспоминания
+- Настройте правильные фильтры памяти
+
+### 3. Оптимизация производительности
+- Используйте асинхронные операции для больших баз знаний
+- Кэшируйте часто используемые результаты
+- Мониторьте использование токенов
+
+### 4. Безопасность
+- Валидируйте входные данные
+- Ограничивайте доступ к чувствительным инструментам
+- Используйте правильную аутентификацию
+
+## Заключение
+
+Agno предоставляет мощный и гибкий фреймворк для создания интеллектуальных агентов. От простых инструментальных агентов до сложных мультиагентных систем с памятью и рассуждениями - Agno покрывает весь спектр потребностей в разработке ИИ-агентов.
+
+Начните с простых агентов уровня 1 и постепенно добавляйте сложность по мере необходимости. Используйте команды агентов для решения сложных задач и не забывайте о мониторинге производительности.
+
+---
+
+*Этот документ основан на официальной документации Agno и служит справочным руководством для создания агентов с использованием фреймворка Agno.*

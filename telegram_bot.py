@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 import os
 from news_agent import NewsAgent
 from content_formatter import ContentFormatter
+from post_editor import PostEditor
 from datetime import datetime
 import hashlib
 
@@ -31,6 +32,9 @@ if missing_vars:
     logger.error(f"Отсутствуют обязательные переменные окружения: {missing_vars}")
     exit(1)
 
+# Инициализация редактора постов
+post_editor = PostEditor(api_key=os.getenv('OPENAI_API_KEY'))
+
 # Инициализация бота и диспетчера с FSM
 storage = MemoryStorage()
 bot = Bot(token=os.getenv('TELEGRAM_BOT_TOKEN'))
@@ -39,6 +43,7 @@ dp = Dispatcher(storage=storage)
 # Состояния для FSM
 class NewsStates(StatesGroup):
     waiting_for_approval = State()
+    edit_instruction = State()  # Новое состояние для редактирования
 
 # Инициализация агентов
 try:
@@ -75,6 +80,14 @@ class TelegramNewsBot:
             logger.error(f"Ошибка при обработке новостей: {e}")
             return f"❌ Ошибка: {str(e)}"
     
+    async def edit_post_with_ai(self, original_post: str, edit_instructions: str) -> str:
+        """Редактировать пост с помощью ИИ"""
+        try:
+            return await post_editor.edit_post(original_post, edit_instructions)
+        except Exception as e:
+            logger.error(f"Ошибка редактирования поста: {e}")
+            raise e
+    
     async def publish_to_channel(self, post_content: str):
         """Опубликовать пост в канале"""
         if not self.channel_id:
@@ -104,14 +117,54 @@ def create_approval_keyboard(post_id: str) -> InlineKeyboardMarkup:
                 callback_data=f"approve_{post_id}"
             ),
             InlineKeyboardButton(
-                text="🔄 Другой вариант", 
-                callback_data=f"regenerate_{post_id}"
+                text="✏️ Редактировать", 
+                callback_data=f"edit_{post_id}"
             )
         ],
         [
             InlineKeyboardButton(
+                text="🔄 Другой вариант", 
+                callback_data=f"regenerate_{post_id}"
+            ),
+            InlineKeyboardButton(
                 text="❌ Отменить", 
                 callback_data=f"cancel_{post_id}"
+            )
+        ]
+    ])
+    return keyboard
+
+def create_quick_edit_keyboard(post_id: str) -> InlineKeyboardMarkup:
+    """Создать клавиатуру для быстрого редактирования"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="🎯 Сделать короче", 
+                callback_data=f"quick_edit_{post_id}_shorter"
+            ),
+            InlineKeyboardButton(
+                text="📝 Добавить деталей", 
+                callback_data=f"quick_edit_{post_id}_details"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="🔥 Более привлекательно", 
+                callback_data=f"quick_edit_{post_id}_engaging"
+            ),
+            InlineKeyboardButton(
+                text="📊 Добавить эмодзи", 
+                callback_data=f"quick_edit_{post_id}_emoji"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="✍️ Свои инструкции", 
+                callback_data=f"custom_edit_{post_id}"
+            ),
+            InlineKeyboardButton(
+                text="⬅️ Назад", 
+                callback_data=f"back_to_post_{post_id}"
             )
         ]
     ])
@@ -130,6 +183,7 @@ async def start_command(message: Message):
         "📰 **Новые возможности:**\n"
         "• Предварительный просмотр постов\n"
         "• Подтверждение перед публикацией\n"
+        "• ✏️ **Редактирование постов с ИИ**\n"
         "• Возможность перегенерации контента\n\n"
         "**Доступные команды:**\n"
         "📰 /news - Получить последние новости\n"
@@ -153,12 +207,19 @@ async def help_command(message: Message):
         "2️⃣ Просмотрите сгенерированный пост\n"
         "3️⃣ Выберите действие:\n"
         "   • ✅ **Подтверждаю** - опубликовать в канале\n"
+        "   • ✏️ **Редактировать** - изменить пост с помощью ИИ\n"
         "   • 🔄 **Другой вариант** - сгенерировать заново\n"
         "   • ❌ **Отменить** - отменить публикацию\n\n"
-        "🎯 **Примеры использования:**\n"
-        "• `/news` - общие новости\n"
-        "• `/news криптовалюты` - новости о криптовалютах\n"
-        "• `/news спорт` - спортивные новости",
+        "✏️ **Как работает редактирование:**\n"
+        "1️⃣ Нажмите кнопку **Редактировать**\n"
+        "2️⃣ Опишите, что нужно изменить\n"
+        "3️⃣ ИИ применит ваши изменения\n"
+        "4️⃣ Просмотрите результат и выберите действие\n\n"
+        "🎯 **Примеры редактирования:**\n"
+        "• 'Сделай заголовок более привлекательным'\n"
+        "• 'Добавь больше деталей о криптовалютах'\n"
+        "• 'Убери информацию о спорте'\n"
+        "• 'Сделай текст короче'",
         parse_mode='Markdown'
     )
 
@@ -171,6 +232,7 @@ async def status_command(message: Message):
         await message.answer(
             f"🔧 **Статус бота:**\n\n"
             f"🤖 Агенты: ✅ Работают\n"
+            f"✏️ ИИ-редактор: ✅ Активен\n"
             f"📺 Канал: {channel_status}\n"
             f"📊 Активных постов: {len(pending_posts)}\n"
             f"⏰ Время: {datetime.now().strftime('%H:%M:%S')}\n"
@@ -204,6 +266,7 @@ async def news_command(message: Message, state: FSMContext):
         # Сохранить пост в хранилище
         pending_posts[post_id] = {
             'content': post_content,
+            'original_content': post_content,  # Сохраняем оригинал для редактирования
             'topic': topic,
             'user_id': message.from_user.id,
             'created_at': datetime.now()
@@ -226,6 +289,214 @@ async def news_command(message: Message, state: FSMContext):
     except Exception as e:
         logger.error(f"Ошибка в команде /news: {e}")
         await message.answer(f"❌ Произошла ошибка: {str(e)}")
+
+@dp.callback_query(F.data.startswith("edit_"))
+async def edit_post(callback: CallbackQuery, state: FSMContext):
+    """Обработчик редактирования поста"""
+    post_id = callback.data.split("_", 1)[1]
+    
+    if post_id not in pending_posts:
+        await callback.answer("❌ Пост не найден или уже обработан", show_alert=True)
+        return
+    
+    post_data = pending_posts[post_id]
+    
+    # Показать варианты редактирования
+    await callback.message.edit_text(
+        f"✏️ **Редактирование поста**\n\n"
+        f"**Тема:** {post_data['topic']}\n\n"
+        f"🚀 **Выберите тип редактирования:**\n\n"
+        f"🎯 **Сделать короче** - убрать лишние детали\n"
+        f"📝 **Добавить деталей** - расширить информацию\n"
+        f"🔥 **Более привлекательно** - улучшить подачу\n"
+        f"📊 **Добавить эмодзи** - сделать ярче\n\n"
+        f"Или выберите 'Свои инструкции' для пользовательского редактирования:",
+        reply_markup=create_quick_edit_keyboard(post_id),
+        parse_mode='Markdown'
+    )
+    
+    await callback.answer("✏️ Выберите тип редактирования")
+
+@dp.callback_query(F.data.startswith("quick_edit_"))
+async def quick_edit_post(callback: CallbackQuery, state: FSMContext):
+    """Обработчик быстрого редактирования"""
+    parts = callback.data.split("_")
+    post_id = parts[2]
+    edit_type = parts[3]
+    
+    if post_id not in pending_posts:
+        await callback.answer("❌ Пост не найден или уже обработан", show_alert=True)
+        return
+    
+    post_data = pending_posts[post_id]
+    
+    # Определить инструкции по типу редактирования
+    edit_instructions = {
+        "shorter": "Сделай пост короче, убери лишние детали, оставь только самое важное",
+        "details": "Добавь больше деталей и подробностей, расширь информацию",
+        "engaging": "Сделай пост более привлекательным и интересным, улучши заголовок",
+        "emoji": "Добавь больше подходящих эмодзи для лучшего визуального восприятия"
+    }
+    
+    instruction = edit_instructions.get(edit_type, "Улучши пост")
+    
+    # Показать индикатор загрузки
+    await callback.message.edit_text(
+        f"🔄 Применяю изменения: {instruction.lower()}...",
+        parse_mode='Markdown'
+    )
+    
+    try:
+        # Применить редактирование
+        edited_content = await telegram_news_bot.edit_post_with_ai(
+            post_data['original_content'], 
+            instruction
+        )
+        
+        # Обновить данные поста
+        pending_posts[post_id]['content'] = edited_content
+        
+        # Отправить отредактированный пост
+        await callback.message.edit_text(
+            f"✅ **Пост отредактирован!**\n\n"
+            f"📝 **Применено:** {instruction}\n\n"
+            f"📰 **Обновленный пост:**\n"
+            f"🏷️ **Тема:** {post_data['topic']}\n\n"
+            f"---\n\n{edited_content}\n\n---\n\n"
+            f"❓ **Что делаем с этим постом?**",
+            reply_markup=create_approval_keyboard(post_id),
+            parse_mode='Markdown'
+        )
+        
+        await callback.answer("✅ Изменения применены!")
+        
+    except Exception as e:
+        logger.error(f"Ошибка быстрого редактирования: {e}")
+        await callback.message.edit_text(
+            f"❌ Не удалось применить изменения.\n\n"
+            f"**Тема:** {post_data['topic']}\n\n"
+            f"Попробуйте другой тип редактирования:",
+            reply_markup=create_quick_edit_keyboard(post_id),
+            parse_mode='Markdown'
+        )
+        await callback.answer("❌ Ошибка редактирования")
+
+@dp.callback_query(F.data.startswith("back_to_post_"))
+async def back_to_post(callback: CallbackQuery, state: FSMContext):
+    """Вернуться к просмотру поста"""
+    post_id = callback.data.split("_", 3)[3]
+    
+    if post_id not in pending_posts:
+        await callback.answer("❌ Пост не найден или уже обработан", show_alert=True)
+        return
+    
+    post_data = pending_posts[post_id]
+    
+    # Показать пост с кнопками подтверждения
+    await callback.message.edit_text(
+        f"📰 **Предварительный просмотр поста:**\n"
+        f"🏷️ **Тема:** {post_data['topic']}\n\n"
+        f"---\n\n{post_data['content']}\n\n---\n\n"
+        f"❓ **Что делаем с этим постом?**",
+        reply_markup=create_approval_keyboard(post_id),
+        parse_mode='Markdown'
+    )
+    
+    await callback.answer("⬅️ Возврат к посту")
+
+@dp.callback_query(F.data.startswith("custom_edit_"))
+async def custom_edit_post(callback: CallbackQuery, state: FSMContext):
+    """Обработчик пользовательского редактирования"""
+    post_id = callback.data.split("_", 2)[2]
+    
+    if post_id not in pending_posts:
+        await callback.answer("❌ Пост не найден или уже обработан", show_alert=True)
+        return
+    
+    post_data = pending_posts[post_id]
+    
+    # Обновить сообщение с запросом инструкций
+    await callback.message.edit_text(
+        f"✏️ **Пользовательское редактирование**\n\n"
+        f"**Тема:** {post_data['topic']}\n\n"
+        f"📝 **Опишите, что нужно изменить:**\n\n"
+        f"Примеры инструкций:\n"
+        f"• 'Сделай заголовок более привлекательным'\n"
+        f"• 'Добавь больше деталей о технологиях'\n"
+        f"• 'Убери информацию о спорте'\n"
+        f"• 'Измени тон на более формальный'\n\n"
+        f"💬 **Напишите ваши инструкции:**",
+        parse_mode='Markdown'
+    )
+    
+    # Установить состояние ожидания инструкций по редактированию
+    await state.set_state(NewsStates.edit_instruction)
+    await state.update_data(post_id=post_id, message_id=callback.message.message_id)
+    
+    await callback.answer("✏️ Опишите, что нужно изменить")
+
+@dp.message(NewsStates.edit_instruction)
+async def handle_edit_instruction(message: Message, state: FSMContext):
+    """Обработчик инструкций по редактированию"""
+    try:
+        # Получить данные из состояния
+        state_data = await state.get_data()
+        post_id = state_data.get('post_id')
+        message_id = state_data.get('message_id')
+        
+        if not post_id or post_id not in pending_posts:
+            await message.answer("❌ Ошибка: пост не найден")
+            await state.clear()
+            return
+        
+        post_data = pending_posts[post_id]
+        edit_instructions = message.text
+        
+        # Показать индикатор загрузки
+        loading_message = await message.answer("🔄 Применяю ваши изменения...")
+        
+        try:
+            # Применить редактирование с помощью ИИ
+            edited_content = await telegram_news_bot.edit_post_with_ai(
+                post_data['original_content'], 
+                edit_instructions
+            )
+            
+            # Обновить данные поста
+            pending_posts[post_id]['content'] = edited_content
+            
+            # Удалить сообщение о загрузке
+            await loading_message.delete()
+            
+            # Отправить отредактированный пост
+            await message.answer(
+                f"✅ **Пост отредактирован!**\n\n"
+                f"📝 **Ваши инструкции:** {edit_instructions}\n\n"
+                f"📰 **Обновленный пост:**\n"
+                f"🏷️ **Тема:** {post_data['topic']}\n\n"
+                f"---\n\n{edited_content}\n\n---\n\n"
+                f"❓ **Что делаем с этим постом?**",
+                reply_markup=create_approval_keyboard(post_id),
+                parse_mode='Markdown'
+            )
+            
+            # Вернуться к состоянию ожидания подтверждения
+            await state.set_state(NewsStates.waiting_for_approval)
+            await state.update_data(post_id=post_id)
+            
+        except Exception as e:
+            logger.error(f"Ошибка редактирования поста: {e}")
+            await loading_message.delete()
+            await message.answer(
+                "❌ Извините, не удалось применить ваши изменения. "
+                "Попробуйте еще раз позже или используйте другие опции."
+            )
+            await state.clear()
+            
+    except Exception as e:
+        logger.error(f"Ошибка обработки инструкций редактирования: {e}")
+        await message.answer("❌ Произошла ошибка при обработке ваших инструкций")
+        await state.clear()
 
 @dp.callback_query(F.data.startswith("approve_"))
 async def approve_post(callback: CallbackQuery, state: FSMContext):
@@ -292,6 +563,7 @@ async def regenerate_post(callback: CallbackQuery, state: FSMContext):
     # Обновить данные поста
     pending_posts[new_post_id] = {
         'content': new_content,
+        'original_content': new_content,  # Новый оригинал
         'topic': post_data['topic'],
         'user_id': callback.from_user.id,
         'created_at': datetime.now()
@@ -300,7 +572,7 @@ async def regenerate_post(callback: CallbackQuery, state: FSMContext):
     # Удалить старый пост
     del pending_posts[post_id]
     
-# Отправить новый пост
+    # Отправить новый пост
     await callback.message.edit_text(
         f"📰 **Новый вариант поста:**\n"
         f"🏷️ **Тема:** {post_data['topic']}\n\n"
@@ -341,8 +613,14 @@ async def cancel_post(callback: CallbackQuery, state: FSMContext):
     await callback.answer("❌ Пост отменен")
 
 @dp.message()
-async def handle_text(message: Message):
+async def handle_text(message: Message, state: FSMContext):
     """Обработчик текстовых сообщений"""
+    # Проверить, не находимся ли мы в состоянии редактирования
+    current_state = await state.get_state()
+    if current_state == NewsStates.edit_instruction:
+        # Это сообщение уже обработано в handle_edit_instruction
+        return
+    
     await message.answer(
         "🤔 Я не понимаю эту команду.\n"
         "Используйте /help для просмотра доступных команд."
@@ -370,7 +648,7 @@ async def periodic_cleanup():
 
 async def main():
     """Основная функция запуска бота"""
-    logger.info("🚀 Запуск улучшенного Telegram бота...")
+    logger.info("🚀 Запуск улучшенного Telegram бота с функцией редактирования...")
     
     try:
         # Проверить подключение к Telegram API
