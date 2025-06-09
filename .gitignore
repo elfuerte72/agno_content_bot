@@ -1,0 +1,64 @@
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Installation logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Test reports and coverage
+htmlcov/
+.coverage
+.coverage.*
+.cache/
+nosetests.xml
+coverage.xml
+*.cover
+
+# IDE settings
+.vscode/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln
+*.sw?
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# CI/CD backup configs
+.gitlab-ci.yml.orig
+.circleci/
+
+# Docker Compose environment
+.envrc
+
+# SQLite databases
+*.sqlite3
+
+# Secrets and keys
+*.key
+*.pem
+.env

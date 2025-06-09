@@ -1,0 +1,7 @@
+agno>=0.1.0
+openai>=1.0.0
+aiogram>=3.0.0
+duckduckgo-search>=3.0.0
+tavily-python>=0.3.0
+exa-py>=1.0.0
+python-dotenv>=1.0.0
