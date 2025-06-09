@@ -60,6 +60,8 @@ pending_posts = {}
 class TelegramNewsBot:
     def __init__(self):
         self.channel_id = os.getenv('TELEGRAM_CHANNEL_ID')
+        self.channel_username = os.getenv('TELEGRAM_CHANNEL_USERNAME', '@optimaai_tg')
+        logger.info(f"Инициализация бота с каналом: {self.channel_username} (ID: {self.channel_id})")
         
     async def generate_news_post(self, topic: str = "latest news"):
         """Генерировать новостной пост"""
@@ -90,20 +92,64 @@ class TelegramNewsBot:
     
     async def publish_to_channel(self, post_content: str):
         """Опубликовать пост в канале"""
-        if not self.channel_id:
-            return "⚠️ Канал не настроен"
+        # Определить целевой канал
+        target_channel = self.channel_id or self.channel_username
+        
+        if not target_channel:
+            logger.error("Канал не настроен - отсутствует TELEGRAM_CHANNEL_ID и TELEGRAM_CHANNEL_USERNAME")
+            return "⚠️ Канал не настроен в переменных окружения"
         
         try:
-            await bot.send_message(
-                chat_id=self.channel_id,
+            logger.info(f"Попытка публикации в канал: {target_channel}")
+            
+            # Сначала проверить доступ к каналу
+            try:
+                chat_info = await bot.get_chat(target_channel)
+                logger.info(f"Канал найден: {chat_info.title} (ID: {chat_info.id})")
+                
+                # Проверить права администратора
+                try:
+                    admins = await bot.get_chat_administrators(chat_info.id)
+                    bot_info = await bot.get_me()
+                    is_admin = any(admin.user.id == bot_info.id for admin in admins)
+                    
+                    if not is_admin:
+                        logger.error(f"Бот не является администратором канала {target_channel}")
+                        return "❌ Бот не является администратором канала. Добавьте бота как администратора с правами на отправку сообщений."
+                        
+                    logger.info("Бот имеет права администратора")
+                    
+                except Exception as admin_error:
+                    logger.warning(f"Не удалось проверить права администратора: {admin_error}")
+                    
+            except Exception as chat_error:
+                logger.error(f"Не удалось получить информацию о канале {target_channel}: {chat_error}")
+                return f"❌ Канал не найден или недоступен: {target_channel}. Убедитесь, что бот добавлен в канал."
+            
+            # Отправить сообщение
+            message = await bot.send_message(
+                chat_id=target_channel,
                 text=post_content,
-                parse_mode='Markdown'
+                parse_mode='Markdown',
+                disable_web_page_preview=False
             )
-            logger.info(f"Пост опубликован в канале {self.channel_id}")
-            return "✅ Пост успешно опубликован в канале!"
+            
+            logger.info(f"✅ Пост успешно опубликован в канале {target_channel} (message_id: {message.message_id})")
+            return f"✅ Пост успешно опубликован в канале {chat_info.title}!"
+            
         except Exception as e:
-            logger.error(f"Ошибка публикации в канале: {e}")
-            return f"❌ Ошибка публикации: {str(e)}"
+            error_msg = str(e)
+            logger.error(f"❌ Ошибка публикации в канале {target_channel}: {error_msg}")
+            
+            # Детализированная обработка ошибок
+            if "chat not found" in error_msg.lower():
+                return f"❌ Канал {target_channel} не найден. Проверьте правильность имени канала."
+            elif "not enough rights" in error_msg.lower() or "forbidden" in error_msg.lower():
+                return f"❌ Недостаточно прав для публикации в канале {target_channel}. Добавьте бота как администратора."
+            elif "bot was blocked" in error_msg.lower():
+                return f"❌ Бот заблокирован в канале {target_channel}."
+            else:
+                return f"❌ Ошибка публикации: {error_msg}"
 
 # Создание экземпляра бота
 telegram_news_bot = TelegramNewsBot()
