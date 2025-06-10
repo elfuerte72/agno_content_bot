@@ -57,11 +57,37 @@ except Exception as e:
 # Хранилище для постов (в продакшене используйте базу данных)
 pending_posts = {}
 
+# Функция для безопасного получения поста
+def get_post_safely(post_id: str, user_id: int = None):
+    """Безопасно получить пост из хранилища"""
+    if post_id not in pending_posts:
+        logger.warning(f"Пост {post_id} не найден в хранилище. Доступные посты: {list(pending_posts.keys())}")
+        return None
+    
+    post_data = pending_posts[post_id]
+    
+    # Дополнительная проверка владельца (опционально)
+    if user_id and post_data.get('user_id') != user_id:
+        logger.warning(f"Пост {post_id} принадлежит другому пользователю")
+        return None
+        
+    return post_data
+
 class TelegramNewsBot:
     def __init__(self):
-        self.channel_id = os.getenv('TELEGRAM_CHANNEL_ID')
+        # Получаем ID канала и преобразуем в int если это возможно
+        channel_id_str = os.getenv('TELEGRAM_CHANNEL_ID')
+        if channel_id_str:
+            try:
+                self.channel_id = int(channel_id_str)
+            except ValueError:
+                self.channel_id = channel_id_str  # Оставляем как строку если не число
+        else:
+            self.channel_id = None
+            
         self.channel_username = os.getenv('TELEGRAM_CHANNEL_USERNAME', '@optimaai_tg')
         logger.info(f"Инициализация бота с каналом: {self.channel_username} (ID: {self.channel_id})")
+        logger.info(f"Тип channel_id: {type(self.channel_id)}, значение из env: '{channel_id_str}'")
         
     async def generate_news_post(self, topic: str = "latest news"):
         """Генерировать новостной пост"""
@@ -100,7 +126,8 @@ class TelegramNewsBot:
             return "⚠️ Канал не настроен в переменных окружения"
         
         try:
-            logger.info(f"Попытка публикации в канал: {target_channel}")
+            logger.info(f"Попытка публикации в канал: {target_channel} (тип: {type(target_channel)})")
+            logger.info(f"channel_id: {self.channel_id}, channel_username: {self.channel_username}")
             
             # Сначала проверить доступ к каналу
             try:
@@ -126,11 +153,11 @@ class TelegramNewsBot:
                 logger.error(f"Не удалось получить информацию о канале {target_channel}: {chat_error}")
                 return f"❌ Канал не найден или недоступен: {target_channel}. Убедитесь, что бот добавлен в канал."
             
-            # Отправить сообщение
+            # Отправить сообщение (без Markdown, так как контент уже очищен от символов)
             message = await bot.send_message(
                 chat_id=target_channel,
                 text=post_content,
-                parse_mode='Markdown',
+                parse_mode=None,  # Убираем Markdown, так как контент уже очищен
                 disable_web_page_preview=False
             )
             
@@ -341,11 +368,10 @@ async def edit_post(callback: CallbackQuery, state: FSMContext):
     """Обработчик редактирования поста"""
     post_id = callback.data.split("_", 1)[1]
     
-    if post_id not in pending_posts:
+    post_data = get_post_safely(post_id, callback.from_user.id)
+    if not post_data:
         await callback.answer("❌ Пост не найден или уже обработан", show_alert=True)
         return
-    
-    post_data = pending_posts[post_id]
     
     # Показать варианты редактирования
     await callback.message.edit_text(
@@ -370,11 +396,10 @@ async def quick_edit_post(callback: CallbackQuery, state: FSMContext):
     post_id = parts[2]
     edit_type = parts[3]
     
-    if post_id not in pending_posts:
+    post_data = get_post_safely(post_id, callback.from_user.id)
+    if not post_data:
         await callback.answer("❌ Пост не найден или уже обработан", show_alert=True)
         return
-    
-    post_data = pending_posts[post_id]
     
     # Определить инструкции по типу редактирования
     edit_instructions = {
@@ -432,11 +457,10 @@ async def back_to_post(callback: CallbackQuery, state: FSMContext):
     """Вернуться к просмотру поста"""
     post_id = callback.data.split("_", 3)[3]
     
-    if post_id not in pending_posts:
+    post_data = get_post_safely(post_id, callback.from_user.id)
+    if not post_data:
         await callback.answer("❌ Пост не найден или уже обработан", show_alert=True)
         return
-    
-    post_data = pending_posts[post_id]
     
     # Показать пост с кнопками подтверждения
     await callback.message.edit_text(
@@ -455,11 +479,10 @@ async def custom_edit_post(callback: CallbackQuery, state: FSMContext):
     """Обработчик пользовательского редактирования"""
     post_id = callback.data.split("_", 2)[2]
     
-    if post_id not in pending_posts:
+    post_data = get_post_safely(post_id, callback.from_user.id)
+    if not post_data:
         await callback.answer("❌ Пост не найден или уже обработан", show_alert=True)
         return
-    
-    post_data = pending_posts[post_id]
     
     # Обновить сообщение с запросом инструкций
     await callback.message.edit_text(
@@ -549,11 +572,10 @@ async def approve_post(callback: CallbackQuery, state: FSMContext):
     """Обработчик подтверждения поста"""
     post_id = callback.data.split("_", 1)[1]
     
-    if post_id not in pending_posts:
+    post_data = get_post_safely(post_id, callback.from_user.id)
+    if not post_data:
         await callback.answer("❌ Пост не найден или уже обработан", show_alert=True)
         return
-    
-    post_data = pending_posts[post_id]
     
     # Показать индикатор загрузки
     await callback.message.edit_text(
@@ -587,11 +609,10 @@ async def regenerate_post(callback: CallbackQuery, state: FSMContext):
     """Обработчик перегенерации поста"""
     post_id = callback.data.split("_", 1)[1]
     
-    if post_id not in pending_posts:
+    post_data = get_post_safely(post_id, callback.from_user.id)
+    if not post_data:
         await callback.answer("❌ Пост не найден или уже обработан", show_alert=True)
         return
-    
-    post_data = pending_posts[post_id]
     
     # Показать индикатор загрузки
     await callback.message.edit_text(
@@ -635,11 +656,10 @@ async def cancel_post(callback: CallbackQuery, state: FSMContext):
     """Обработчик отмены поста"""
     post_id = callback.data.split("_", 1)[1]
     
-    if post_id not in pending_posts:
+    post_data = get_post_safely(post_id, callback.from_user.id)
+    if not post_data:
         await callback.answer("❌ Пост не найден или уже обработан", show_alert=True)
         return
-    
-    post_data = pending_posts[post_id]
     
     # Удалить пост из хранилища
     del pending_posts[post_id]
