@@ -153,11 +153,11 @@ class TelegramNewsBot:
                 logger.error(f"Не удалось получить информацию о канале {target_channel}: {chat_error}")
                 return f"❌ Канал не найден или недоступен: {target_channel}. Убедитесь, что бот добавлен в канал."
             
-            # Отправить сообщение (без Markdown, так как контент уже очищен от символов)
+            # Отправить сообщение с HTML парсингом
             message = await bot.send_message(
                 chat_id=target_channel,
                 text=post_content,
-                parse_mode=None,  # Убираем Markdown, так как контент уже очищен
+                parse_mode='HTML',  # Используем HTML парсинг для поддержки HTML тегов
                 disable_web_page_preview=False
             )
             
